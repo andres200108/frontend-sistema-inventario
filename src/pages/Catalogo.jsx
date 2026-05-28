@@ -1,271 +1,172 @@
 import { useState, useEffect } from "react";
 import { request } from "../api/api";
+import Pagination from "../components/Pagination";
 
-function Catalogo() {
-  const [productos, setProductos] = useState([]);
-  const [loading, setLoading]     = useState(false);
-  const [error, setError]         = useState("");
-  const [success, setSuccess]     = useState("");
-  const [editingId, setEditingId] = useState(null);
+const formVacio = { codigo:"", nombre:"", precio:"", unidad_medida:"", proveedor_id:"" };
+const PER_PAGE = 10;
 
-  const formVacio = {
-    codigo: "", nombre: "", precio: "",
-    stock: "0", unidad_medida: "", proveedor: "",
-  };
-  const [form, setForm] = useState(formVacio);
+export default function Catalogo() {
+  const [productos,   setProductos]   = useState([]);
+  const [proveedores, setProveedores] = useState([]);
+  const [form,        setForm]        = useState(formVacio);
+  const [editingId,   setEditing]     = useState(null);
+  const [loading,     setLoading]     = useState(false);
+  const [error,       setError]       = useState("");
+  const [success,     setSuccess]     = useState("");
+  const [filtro,      setFiltro]      = useState("");
+  const [page,        setPage]        = useState(1);
 
-  useEffect(() => {
-    cargarProductos();
-  }, []);
+  useEffect(() => { cargar(); }, []);
 
-  const cargarProductos = async () => {
+  const cargar = async () => {
     try {
-      setLoading(true);
-      const data = await request("/productos", "GET");
-      setProductos(data);
-    } catch (err) {
-      setError("Error cargando productos");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleChange = (e) => {
-    setForm({ ...form, [e.target.name]: e.target.value });
+      const [prods, provs] = await Promise.all([
+        request("/productos", "GET"),
+        request("/proveedores", "GET"),
+      ]);
+      setProductos(prods);
+      setProveedores(provs);
+    } catch(e) { setError("Error cargando datos"); }
   };
 
   const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError("");
-    setSuccess("");
-
-    if (!form.codigo || !form.nombre) {
-      setError("Código y nombre son obligatorios");
-      return;
-    }
-
+    e.preventDefault(); setError(""); setSuccess("");
+    if (!form.codigo || !form.nombre) return setError("Código y nombre son obligatorios");
     try {
       setLoading(true);
-
+      const payload = {
+        codigo: form.codigo, nombre: form.nombre,
+        precio: Number(form.precio||0), unidad_medida: form.unidad_medida,
+        proveedor: proveedores.find(p=>p.id===Number(form.proveedor_id))?.nombre || "",
+      };
       if (editingId) {
-        // Actualizar
-        await request(`/productos/${editingId}`, "PUT", {
-          ...form,
-          precio: Number(form.precio),
-          stock:  Number(form.stock),
-        });
-        setSuccess(`✅ Producto "${form.nombre}" actualizado correctamente`);
+        await request(`/productos/${editingId}`, "PUT", payload);
+        setSuccess(`Producto "${form.nombre}" actualizado`);
       } else {
-        // Crear
-        await request("/productos", "POST", {
-          ...form,
-          precio: Number(form.precio),
-          stock:  Number(form.stock),
-        });
-        setSuccess(`✅ Producto "${form.nombre}" creado correctamente`);
+        await request("/productos", "POST", { ...payload, stock: 0 });
+        setSuccess(`Producto "${form.nombre}" creado`);
       }
-
-      setForm(formVacio);
-      setEditingId(null);
-      await cargarProductos();
-
-    } catch (err) {
-      setError(err.message || "Error guardando producto");
-    } finally {
-      setLoading(false);
-    }
+      setForm(formVacio); setEditing(null); setPage(1); await cargar();
+    } catch(e) { setError(e.message || "Error guardando producto"); }
+    finally { setLoading(false); }
   };
 
   const handleEdit = (p) => {
-    setEditingId(p.id);
-    setForm({
-      codigo:        p.codigo        || "",
-      nombre:        p.nombre        || "",
-      precio:        p.precio        || "",
-      stock:         p.stock         || "0",
-      unidad_medida: p.unidad_medida || "",
-      proveedor:     p.proveedor     || "",
-    });
-    setError("");
-    setSuccess("");
-    window.scrollTo(0, 0);
+    const prov = proveedores.find(pr => pr.nombre === p.proveedor);
+    setEditing(p.id);
+    setForm({ codigo: p.codigo||"", nombre: p.nombre||"", precio: p.precio||"", unidad_medida: p.unidad_medida||"", proveedor_id: prov?.id||"" });
+    setError(""); setSuccess(""); window.scrollTo(0,0);
   };
 
   const handleDelete = async (id, nombre) => {
-    if (!confirm(`¿Eliminar el producto "${nombre}"? Esta acción no se puede deshacer.`)) return;
-    try {
-      await request(`/productos/${id}`, "DELETE");
-      setSuccess(`✅ Producto "${nombre}" eliminado`);
-      await cargarProductos();
-    } catch (err) {
-      setError("Error eliminando producto");
-    }
+    if (!confirm(`¿Desactivar "${nombre}"?`)) return;
+    try { await request(`/productos/${id}`, "DELETE"); setSuccess(`"${nombre}" desactivado`); setPage(1); await cargar(); }
+    catch(e) { setError(e.message || "Error"); }
   };
 
-  const handleCancelar = () => {
-    setEditingId(null);
-    setForm(formVacio);
-    setError("");
-    setSuccess("");
-  };
+  const filtrados = productos.filter(p =>
+    p.nombre.toLowerCase().includes(filtro.toLowerCase()) ||
+    (p.codigo||"").toLowerCase().includes(filtro.toLowerCase())
+  );
+
+  const paginated = filtrados.slice((page-1)*PER_PAGE, page*PER_PAGE);
 
   return (
-    <div style={{ padding: "20px" }}>
-      <h2>🗂️ Gestión de catálogo de productos</h2>
+    <div>
+      <h2 style={s.h2}>Catálogo de productos</h2>
 
-      {/* ── FORMULARIO ── */}
-      <div style={styleCard}>
-        <h3 style={{ marginTop: 0 }}>
-          {editingId ? "✏️ Editar producto" : "➕ Nuevo producto"}
-        </h3>
-
+      <div style={s.card}>
+        <h3 style={s.h3}>{editingId ? "Editar producto" : "Nuevo producto"}</h3>
         <form onSubmit={handleSubmit}>
-          <div style={styleGrid}>
-
-            {/* Código */}
-            <div style={styleField}>
-              <label style={styleLabel}>Código *</label>
-              <input
-                name="codigo" value={form.codigo} onChange={handleChange}
-                placeholder="Ej: PROD-001" style={styleInput}
-                disabled={!!editingId} // no se puede cambiar el código al editar
-              />
+          <div style={s.grid3}>
+            <div style={s.field}>
+              <label style={s.label}>Código *</label>
+              <input value={form.codigo} onChange={e=>setForm({...form,codigo:e.target.value})} placeholder="Ej: 10001" style={s.input} disabled={!!editingId}/>
             </div>
-
-            {/* Nombre */}
-            <div style={styleField}>
-              <label style={styleLabel}>Nombre *</label>
-              <input
-                name="nombre" value={form.nombre} onChange={handleChange}
-                placeholder="Ej: Audífonos Bluetooth" style={styleInput}
-              />
+            <div style={{...s.field, gridColumn:"span 2"}}>
+              <label style={s.label}>Nombre *</label>
+              <input value={form.nombre} onChange={e=>setForm({...form,nombre:e.target.value})} placeholder="Ej: Nevera Samsung 260L" style={s.input}/>
             </div>
-
-            {/* Precio */}
-            <div style={styleField}>
-              <label style={styleLabel}>Precio unitario</label>
-              <input
-                type="number" name="precio" value={form.precio}
-                onChange={handleChange} placeholder="Ej: 25000"
-                min="0" step="0.01" style={styleInput}
-              />
+            <div style={s.field}>
+              <label style={s.label}>Precio unitario</label>
+              <input type="number" min="0" step="0.01" value={form.precio} onChange={e=>setForm({...form,precio:e.target.value})} placeholder="0.00" style={s.input}/>
             </div>
-
-            {/* Stock inicial */}
-            <div style={styleField}>
-              <label style={styleLabel}>Stock inicial</label>
-              <input
-                type="number" name="stock" value={form.stock}
-                onChange={handleChange} placeholder="0"
-                min="0" style={styleInput}
-                disabled={!!editingId} // el stock lo maneja entradas
-              />
-              {editingId && (
-                <small style={{ color: "#888" }}>El stock se actualiza desde entradas de almacén</small>
-              )}
-            </div>
-
-            {/* Unidad de medida */}
-            <div style={styleField}>
-              <label style={styleLabel}>Unidad de medida</label>
-              <select name="unidad_medida" value={form.unidad_medida} onChange={handleChange} style={styleInput}>
+            <div style={s.field}>
+              <label style={s.label}>Unidad</label>
+              <select value={form.unidad_medida} onChange={e=>setForm({...form,unidad_medida:e.target.value})} style={s.input}>
                 <option value="">Seleccionar...</option>
-                <option value="UND">Unidad (UND)</option>
-                <option value="KG">Kilogramo (KG)</option>
-                <option value="LT">Litro (LT)</option>
-                <option value="MT">Metro (MT)</option>
-                <option value="CJ">Caja (CJ)</option>
-                <option value="PAQ">Paquete (PAQ)</option>
+                {["UND","KG","LT","MT","CJ","PAQ"].map(u=><option key={u} value={u}>{u}</option>)}
               </select>
             </div>
-
-            {/* Proveedor */}
-            <div style={styleField}>
-              <label style={styleLabel}>Proveedor</label>
-              <input
-                name="proveedor" value={form.proveedor} onChange={handleChange}
-                placeholder="Nombre del proveedor" style={styleInput}
-              />
+            <div style={s.field}>
+              <label style={s.label}>Proveedor</label>
+              <select value={form.proveedor_id} onChange={e=>setForm({...form,proveedor_id:e.target.value})} style={s.input}>
+                <option value="">Sin proveedor</option>
+                {proveedores.map(p=><option key={p.id} value={p.id}>{p.nombre}</option>)}
+              </select>
             </div>
-
           </div>
-
-          {error   && <p style={{ color: "red",   margin: "8px 0" }}>{error}</p>}
-          {success && <p style={{ color: "green", margin: "8px 0" }}>{success}</p>}
-
-          <div style={{ display: "flex", gap: "10px", marginTop: "10px" }}>
-            <button type="submit" disabled={loading} style={styleBtnPrimary}>
-              {loading ? "Guardando..." : editingId ? "Guardar cambios" : "Crear producto"}
+          {error && <p style={s.err}>{error}</p>}
+          {success && <p style={s.ok}>{success}</p>}
+          <div style={{display:"flex",gap:8,marginTop:12}}>
+            <button type="submit" disabled={loading} style={s.btnPrimary}>
+              {loading?"Guardando...":editingId?"Guardar cambios":"Crear producto"}
             </button>
-            {editingId && (
-              <button type="button" onClick={handleCancelar} style={styleBtnSecondary}>
-                Cancelar
-              </button>
-            )}
+            {editingId && <button type="button" onClick={()=>{setEditing(null);setForm(formVacio);}} style={s.btnSecondary}>Cancelar</button>}
           </div>
         </form>
       </div>
 
-      {/* ── TABLA DE PRODUCTOS ── */}
-      <h3 style={{ marginTop: "30px" }}>📦 Productos registrados ({productos.length})</h3>
+      <div style={s.toolbar}>
+        <h3 style={{margin:0,fontSize:15,fontWeight:500}}>Productos ({filtrados.length})</h3>
+        <input placeholder="Filtrar por nombre o código..." value={filtro} onChange={e=>{setFiltro(e.target.value);setPage(1);}} style={s.search}/>
+      </div>
 
-      {loading && <p>Cargando...</p>}
-
-      {productos.length === 0 && !loading ? (
-        <p>No hay productos registrados aún</p>
-      ) : (
-        <table style={styleTable}>
-          <thead>
-            <tr style={{ background: "#f0f0f0" }}>
-              <th style={styleTh}>Código</th>
-              <th style={styleTh}>Nombre</th>
-              <th style={styleTh}>UM</th>
-              <th style={styleTh}>Precio</th>
-              <th style={styleTh}>Stock</th>
-              <th style={styleTh}>Proveedor</th>
-              <th style={styleTh}>Acciones</th>
-            </tr>
-          </thead>
-          <tbody>
-            {productos.map((p) => (
-              <tr key={p.id} style={{ borderBottom: "1px solid #eee" }}>
-                <td style={styleTd}>{p.codigo}</td>
-                <td style={styleTd}>{p.nombre}</td>
-                <td style={styleTd}>{p.unidad_medida || "—"}</td>
-                <td style={styleTd}>${Number(p.precio || 0).toLocaleString("es-CO")}</td>
-                <td style={{ ...styleTd, color: p.stock === 0 ? "red" : "inherit", fontWeight: p.stock === 0 ? "bold" : "normal" }}>
-                  {p.stock}
-                </td>
-                <td style={styleTd}>{p.proveedor || "—"}</td>
-                <td style={styleTd}>
-                  <button onClick={() => handleEdit(p)} style={styleBtnEdit}>
-                    Editar
-                  </button>
-                  <button onClick={() => handleDelete(p.id, p.nombre)} style={styleBtnDelete}>
-                    Eliminar
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      {paginated.length===0 ? <p style={{color:"var(--color-text-tertiary)",fontSize:13}}>No hay productos</p> : (
+        <>
+          <table style={s.table}>
+            <thead><tr style={s.thead}>
+              {["Código","Nombre","UM","Precio","Stock","Proveedor","Acciones"].map(h=><th key={h} style={s.th}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {paginated.map(p=>(
+                <tr key={p.id} style={{borderBottom:"0.5px solid var(--color-border-tertiary)"}}>
+                  <td style={s.td}>{p.codigo||"—"}</td>
+                  <td style={s.td}>{p.nombre}</td>
+                  <td style={s.td}>{p.unidad_medida||"—"}</td>
+                  <td style={s.td}>${Number(p.precio||0).toLocaleString("es-CO")}</td>
+                  <td style={s.td}><span style={{background:p.stock===0?"var(--color-background-danger)":p.stock<=5?"var(--color-background-warning)":"var(--color-background-success)",color:p.stock===0?"var(--color-text-danger)":p.stock<=5?"var(--color-text-warning)":"var(--color-text-success)",padding:"2px 8px",borderRadius:4,fontSize:12,fontWeight:500}}>{p.stock}</span></td>
+                  <td style={s.td}>{p.proveedor||"—"}</td>
+                  <td style={s.td}>
+                    <button onClick={()=>handleEdit(p)} style={s.btnEdit}>Editar</button>
+                    <button onClick={()=>handleDelete(p.id,p.nombre)} style={s.btnDel}>Desactivar</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <Pagination current={page} total={filtrados.length} perPage={PER_PAGE} onChange={setPage} />
+        </>
       )}
     </div>
   );
 }
 
-/* ── Estilos ── */
-const styleCard       = { background: "#f9f9f9", padding: "24px", borderRadius: "8px", border: "1px solid #e0e0e0", marginBottom: "20px" };
-const styleGrid       = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" };
-const styleField      = { display: "flex", flexDirection: "column", gap: "4px" };
-const styleLabel      = { fontSize: "13px", fontWeight: "600", color: "#444" };
-const styleInput      = { padding: "9px 12px", fontSize: "14px", borderRadius: "6px", border: "1px solid #ccc", width: "100%", boxSizing: "border-box" };
-const styleBtnPrimary = { padding: "10px 24px", background: "#2563eb", color: "white", border: "none", borderRadius: "6px", cursor: "pointer", fontSize: "14px" };
-const styleBtnSecondary = { padding: "10px 20px", background: "#6b7280", color: "white", border: "none", borderRadius: "6px", cursor: "pointer", fontSize: "14px" };
-const styleBtnEdit    = { padding: "5px 12px", background: "#f59e0b", color: "white", border: "none", borderRadius: "4px", cursor: "pointer", marginRight: "6px", fontSize: "12px" };
-const styleBtnDelete  = { padding: "5px 12px", background: "#ef4444", color: "white", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px" };
-const styleTable      = { width: "100%", borderCollapse: "collapse" };
-const styleTh         = { padding: "10px 12px", textAlign: "left", borderBottom: "2px solid #ddd", fontSize: "13px" };
-const styleTd         = { padding: "8px 12px", fontSize: "13px" };
-
-export default Catalogo;
+const s = {
+  h2:{margin:"0 0 1.5rem",fontSize:18,fontWeight:500},h3:{margin:"0 0 1rem",fontSize:15,fontWeight:500},
+  card:{background:"var(--color-background-primary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:12,padding:"1.5rem",marginBottom:"1.5rem"},
+  grid3:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12},
+  field:{display:"flex",flexDirection:"column",gap:4},label:{fontSize:13,fontWeight:500,color:"var(--color-text-secondary)"},
+  input:{padding:"8px 12px",fontSize:14,borderRadius:6,border:"0.5px solid var(--color-border-secondary)",width:"100%",boxSizing:"border-box"},
+  err:{color:"var(--color-text-danger)",fontSize:13,margin:"8px 0",padding:"10px 12px",background:"var(--color-background-danger)",borderRadius:6},
+  ok:{color:"var(--color-text-success)",fontSize:13,margin:"8px 0",padding:"10px 12px",background:"var(--color-background-success)",borderRadius:6},
+  toolbar:{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"1rem",gap:12},
+  search:{padding:"8px 12px",fontSize:13,borderRadius:6,border:"0.5px solid var(--color-border-secondary)",width:280},
+  btnPrimary:{padding:"8px 20px",background:"var(--color-background-info)",color:"var(--color-text-info)",border:"0.5px solid var(--color-border-info)",borderRadius:6,cursor:"pointer",fontSize:13,fontWeight:500},
+  btnSecondary:{padding:"8px 16px",background:"var(--color-background-secondary)",color:"var(--color-text-secondary)",border:"0.5px solid var(--color-border-secondary)",borderRadius:6,cursor:"pointer",fontSize:13},
+  btnEdit:{padding:"4px 10px",background:"var(--color-background-warning)",color:"var(--color-text-warning)",border:"0.5px solid var(--color-border-warning)",borderRadius:4,cursor:"pointer",fontSize:12,marginRight:6},
+  btnDel:{padding:"4px 10px",background:"var(--color-background-danger)",color:"var(--color-text-danger)",border:"0.5px solid var(--color-border-danger)",borderRadius:4,cursor:"pointer",fontSize:12},
+  table:{width:"100%",borderCollapse:"collapse"},thead:{background:"var(--color-background-secondary)"},
+  th:{padding:"10px 12px",textAlign:"left",fontSize:13,fontWeight:500,borderBottom:"0.5px solid var(--color-border-secondary)"},
+  td:{padding:"8px 12px",fontSize:13},
+};
